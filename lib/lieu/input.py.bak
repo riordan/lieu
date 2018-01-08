@@ -20,7 +20,7 @@ class GeoJSONParser(object):
         else:
             raise StopIteration
 
-    def __next__(self):
+    def next(self):
         return self.next_feature()
 
 

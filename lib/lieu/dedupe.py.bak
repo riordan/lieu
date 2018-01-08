@@ -96,7 +96,7 @@ class AddressDeduper(object):
     def address_labels_and_values(cls, address):
         string_address = {k: v for k, v in six.iteritems(address) if isinstance(v, six.string_types) and v.strip()}
 
-        return list(string_address.keys()), list(string_address.values())
+        return string_address.keys(), string_address.values()
 
     @classmethod
     def address_minus_name(cls, address):
@@ -194,8 +194,8 @@ class VenueDeduper(AddressDeduper):
         if not a1_name_tokens or not a2_name_tokens:
             return None, 0.0
 
-        a1_name_tokens, a1_tfidf_norm = list(zip(*cls.tfidf_vector_normalized(a1_name_tokens, tfidf)))
-        a2_name_tokens, a2_tfidf_norm = list(zip(*cls.tfidf_vector_normalized(a2_name_tokens, tfidf)))
+        a1_name_tokens, a1_tfidf_norm = zip(*cls.tfidf_vector_normalized(a1_name_tokens, tfidf))
+        a2_name_tokens, a2_tfidf_norm = zip(*cls.tfidf_vector_normalized(a2_name_tokens, tfidf))
 
         return is_name_duplicate_fuzzy(a1_name_tokens, a1_tfidf_norm, a2_name_tokens, a2_tfidf_norm, languages=languages,
                                        likely_dupe_threshold=likely_dupe_threshold, needs_review_threshold=needs_review_threshold)

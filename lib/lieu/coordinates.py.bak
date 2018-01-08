@@ -24,8 +24,8 @@ from lieu.floats import isclose
 beginning_re = re.compile('^[^0-9\-]+', re.UNICODE)
 end_re = re.compile('[^0-9]+$', re.UNICODE)
 
-latitude_dms_regex = re.compile(r'^(-?[0-9]{1,2})[ ]*[ :°ºd][ ]*([0-5]?[0-9])?[ ]*[:\'\u2032m]?[ ]*([0-5]?[0-9](?:\.\d+)?)?[ ]*[:\?\"\u2033s]?[ ]*(N|n|S|s)?$', re.I | re.UNICODE)
-longitude_dms_regex = re.compile(r'^(-?1[0-8][0-9]|0?[0-9]{1,2})[ ]*[ :°ºd][ ]*([0-5]?[0-9])?[ ]*[:\'\u2032m]?[ ]*([0-5]?[0-9](?:\.\d+)?)?[ ]*[:\?\"\u2033s]?[ ]*(E|e|W|w)?$', re.I | re.UNICODE)
+latitude_dms_regex = re.compile(ur'^(-?[0-9]{1,2})[ ]*[ :°ºd][ ]*([0-5]?[0-9])?[ ]*[:\'\u2032m]?[ ]*([0-5]?[0-9](?:\.\d+)?)?[ ]*[:\?\"\u2033s]?[ ]*(N|n|S|s)?$', re.I | re.UNICODE)
+longitude_dms_regex = re.compile(ur'^(-?1[0-8][0-9]|0?[0-9]{1,2})[ ]*[ :°ºd][ ]*([0-5]?[0-9])?[ ]*[:\'\u2032m]?[ ]*([0-5]?[0-9](?:\.\d+)?)?[ ]*[:\?\"\u2033s]?[ ]*(E|e|W|w)?$', re.I | re.UNICODE)
 
 latitude_decimal_with_direction_regex = re.compile('^(-?[0-9][0-9](?:\.[0-9]+))[ ]*[ :°ºd]?[ ]*(N|n|S|s)$', re.I)
 longitude_decimal_with_direction_regex = re.compile('^(-?1[0-8][0-9]|0?[0-9][0-9](?:\.[0-9]+))[ ]*[ :°ºd]?[ ]*(E|e|W|w)$', re.I)
@@ -112,11 +112,11 @@ def latlon_to_decimal(latitude, longitude):
     if latitude is None or longitude is None:
         return None, None
 
-    latitude = safe_decode(latitude).strip(' ,;|')
-    longitude = safe_decode(longitude).strip(' ,;|')
+    latitude = safe_decode(latitude).strip(u' ,;|')
+    longitude = safe_decode(longitude).strip(u' ,;|')
 
-    latitude = latitude.replace(',', '.')
-    longitude = longitude.replace(',', '.')
+    latitude = latitude.replace(u',', u'.')
+    longitude = longitude.replace(u',', u'.')
 
     lat_dms = latitude_dms_regex.match(latitude)
     lat_dir = latitude_decimal_with_direction_regex.match(latitude)
@@ -132,8 +132,8 @@ def latlon_to_decimal(latitude, longitude):
         latitude = float(d) * sign
         have_lat = True
     else:
-        latitude = re.sub(beginning_re, '', latitude)
-        latitude = re.sub(end_re, '', latitude)
+        latitude = re.sub(beginning_re, u'', latitude)
+        latitude = re.sub(end_re, u'', latitude)
 
     lon_dms = longitude_dms_regex.match(longitude)
     lon_dir = longitude_decimal_with_direction_regex.match(longitude)
@@ -149,8 +149,8 @@ def latlon_to_decimal(latitude, longitude):
         longitude = float(d) * sign
         have_lon = True
     else:
-        longitude = re.sub(beginning_re, '', longitude)
-        longitude = re.sub(end_re, '', longitude)
+        longitude = re.sub(beginning_re, u'', longitude)
+        longitude = re.sub(end_re, u'', longitude)
 
     latitude = float(latitude)
     longitude = float(longitude)

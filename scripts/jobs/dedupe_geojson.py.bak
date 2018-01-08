@@ -77,9 +77,9 @@ class DedupeVenuesJob(MRJob):
 
         geojson_lines = lines.map(lambda line: json.loads(line.rstrip()))
         geojson_ids = geojson_lines.cache().zipWithIndex()
-        id_geojson = geojson_ids.map(lambda geojson_uid: (geojson_uid[1], geojson_uid[0]))
+        id_geojson = geojson_ids.map(lambda (geojson, uid): (uid, geojson))
 
-        address_ids = geojson_ids.map(lambda geojson_uid1: (Address.from_geojson(geojson_uid1[0]), geojson_uid1[1]))
+        address_ids = geojson_ids.map(lambda (geojson, uid): (Address.from_geojson(geojson), uid))
 
         geo_model = not self.options.no_geo_model
 
@@ -93,21 +93,21 @@ class DedupeVenuesJob(MRJob):
         else:
             dupes_with_classes_and_sims = AddressDeduperSpark.dupe_sims(address_ids, geo_model=geo_model, use_latlon=use_latlon, use_city=use_city, use_postal_code=use_postal_code)
 
-        dupes = dupes_with_classes_and_sims.filter(lambda uid1_uid2_classification_sim: uid1_uid2_classification_sim[1][0] in (DedupeResponse.classifications.EXACT_DUPE, DedupeResponse.classifications.LIKELY_DUPE)) \
-                                           .map(lambda uid1_uid2_classification_sim2: (uid1_uid2_classification_sim2[0][0], True)) \
+        dupes = dupes_with_classes_and_sims.filter(lambda ((uid1, uid2), (classification, sim)): classification in (DedupeResponse.classifications.EXACT_DUPE, DedupeResponse.classifications.LIKELY_DUPE)) \
+                                           .map(lambda ((uid1, uid2), (classification, sim)): (uid1, True)) \
                                            .distinct()
 
-        possible_dupe_pairs = dupes_with_classes_and_sims.map(lambda uid1_uid2_classification_sim3: (uid1_uid2_classification_sim3[0][0], True)) \
+        possible_dupe_pairs = dupes_with_classes_and_sims.map(lambda ((uid1, uid2), (classification, sim)): (uid1, True)) \
                                                          .distinct()
 
-        canonicals = dupes_with_classes_and_sims.map(lambda uid1_uid2_classification_sim4: (uid1_uid2_classification_sim4[0][1], (uid1_uid2_classification_sim4[0][0], uid1_uid2_classification_sim4[1][0], uid1_uid2_classification_sim4[1][1]))) \
+        canonicals = dupes_with_classes_and_sims.map(lambda ((uid1, uid2), (classification, sim)): (uid2, (uid1, classification, sim))) \
                                                 .subtractByKey(dupes) \
-                                                .map(lambda uid2_uid1_classification_sim: (uid2_uid1_classification_sim[0], True)) \
+                                                .map(lambda (uid2, (uid1, classification, sim)): (uid2, True)) \
                                                 .distinct()
 
-        dupes_with_canonical = dupes_with_classes_and_sims.map(lambda uid1_uid2_classification_sim5: (uid1_uid2_classification_sim5[0][1], (uid1_uid2_classification_sim5[0][0], uid1_uid2_classification_sim5[1][0], uid1_uid2_classification_sim5[1][1]))) \
+        dupes_with_canonical = dupes_with_classes_and_sims.map(lambda ((uid1, uid2), (classification, sim)): (uid2, (uid1, classification, sim))) \
                                                           .leftOuterJoin(canonicals) \
-                                                          .map(lambda uid2_uid1_classification_sim_is_canonical: ((uid2_uid1_classification_sim_is_canonical[0][0], uid2_uid1_classification_sim_is_canonical[0]), (uid2_uid1_classification_sim_is_canonical[0][1], uid2_uid1_classification_sim_is_canonical[1][1] or False, uid2_uid1_classification_sim_is_canonical[0][2])))
+                                                          .map(lambda (uid2, ((uid1, classification, sim), is_canonical)): ((uid1, uid2), (classification, is_canonical or False, sim)))
 
         if not self.options.address_only:
             explain = DedupeResponse.explain_venue_dupe(name_dupe_threshold=self.options.name_dupe_threshold,
@@ -116,23 +116,24 @@ class DedupeVenuesJob(MRJob):
         else:
             explain = DedupeResponse.explain_address_dupe(with_unit=self.options.with_unit)
 
-        dupe_responses = dupes_with_canonical.map(lambda uid1_uid2_classification_is_canonical_sim: ((uid1_uid2_classification_is_canonical_sim[0][1], (uid1_uid2_classification_is_canonical_sim[0][0], uid1_uid2_classification_is_canonical_sim[1][0], uid1_uid2_classification_is_canonical_sim[1][1], uid1_uid2_classification_is_canonical_sim[1][2])))) \
+        dupe_responses = dupes_with_canonical.map(lambda ((uid1, uid2), (classification, is_canonical, sim)): ((uid2, (uid1, classification, is_canonical, sim)))) \
                                              .join(id_geojson) \
-                                             .map(lambda uid2_uid1_classification_is_canonical_sim_val2: (uid2_uid1_classification_is_canonical_sim_val2[0][0], (uid2_uid1_classification_is_canonical_sim_val2[1][1], uid2_uid1_classification_is_canonical_sim_val2[0][1], uid2_uid1_classification_is_canonical_sim_val2[0][2], uid2_uid1_classification_is_canonical_sim_val2[0][3]))) \
+                                             .map(lambda (uid2, ((uid1, classification, is_canonical, sim), val2)): (uid1, (val2, classification, is_canonical, sim))) \
                                              .groupByKey() \
                                              .leftOuterJoin(dupes) \
                                              .join(id_geojson) \
-                                             .map(lambda uid1_same_as_is_dupe_value: (uid1_same_as_is_dupe_value[0], DedupeResponse.create(uid1_same_as_is_dupe_value[1][1], uid1_same_as_is_dupe_value[0][1]=uid1_same_as_is_dupe_value[0][1] or False, add_random_guid=True, uid1_same_as_is_dupe_value[0][0]=uid1_same_as_is_dupe_value[0][0], explain=explain)))
+                                             .map(lambda (uid1, ((same_as, is_dupe), value)): (uid1, DedupeResponse.create(value, is_dupe=is_dupe or False, add_random_guid=True, same_as=same_as, explain=explain)))
 
         if dupes_only:
-            all_responses = list(dupe_responses.values()) \
+            all_responses = dupe_responses.values() \
                                           .map(lambda response: json.dumps(response))
         else:
             non_dupe_responses = id_geojson.subtractByKey(possible_dupe_pairs) \
-                                           .map(lambda uid_value: (uid_value[0], DedupeResponse.base_response(uid_value[1], is_dupe=False)))
+                                           .map(lambda (uid, value): (uid, DedupeResponse.base_response(value, is_dupe=False)))
 
-            all_responses = list(non_dupe_responses.union(dupe_responses) \
-                                              .sortByKey().values()) \
+            all_responses = non_dupe_responses.union(dupe_responses) \
+                                              .sortByKey() \
+                                              .values() \
                                               .map(lambda response: json.dumps(response))
 
         all_responses.saveAsTextFile(output_path)
