@@ -13,8 +13,9 @@ from lieu.spark.utils import IDPairRDD
 class AddressDeduperSpark(object):
     @classmethod
     def address_dupe_pairs(cls, address_hashes, sub_building=False):
-        dupe_pairs = list(address_hashes.groupByKey() \
-                                   .filter(lambda key_vals: len(key_vals[1]) > 1).values()) \
+        dupe_pairs = address_hashes.groupByKey() \
+                                   .filter(lambda (key, vals): len(vals) > 1) \
+                                   .values() \
                                    .flatMap(lambda vals: [(max(uid1, uid2), min(uid1, uid2))
                                                           for (uid1, a1), (uid2, a2) in itertools.combinations(vals, 2)
                                                           if AddressDeduper.is_address_dupe(a1, a2) and
@@ -25,10 +26,10 @@ class AddressDeduperSpark(object):
 
     @classmethod
     def dupe_sims(cls, address_ids, use_latlon=True, use_city=False, use_postal_code=False):
-        address_hashes = address_ids.flatMap(lambda address_uid: [(h, (address_uid[1], address_uid[0])) for h in AddressDeduper.near_dupe_hashes(address_uid[0], use_latlon=use_latlon, use_city=use_city, use_postal_code=use_postal_code)])
+        address_hashes = address_ids.flatMap(lambda (address, uid): [(h, (uid, address)) for h in AddressDeduper.near_dupe_hashes(address, use_latlon=use_latlon, use_city=use_city, use_postal_code=use_postal_code)])
 
         return cls.address_dupe_pairs(address_hashes) \
-                  .map(lambda uid1_uid2: ((uid1_uid2[0], uid1_uid2[1]), (DedupeResponse.classifications.EXACT_DUPE, 1.0)))
+                  .map(lambda (uid1, uid2): ((uid1, uid2), (DedupeResponse.classifications.EXACT_DUPE, 1.0)))
 
 
 class VenueDeduperSpark(object):
@@ -36,11 +37,11 @@ class VenueDeduperSpark(object):
 
     @classmethod
     def names(cls, address_ids):
-        return address_ids.map(lambda address_uid1: (address_uid1[0].get(AddressComponents.NAME, ''), address_uid1[1]))
+        return address_ids.map(lambda (address, uid): (address.get(AddressComponents.NAME, ''), uid))
 
     @classmethod
     def names_geo(cls, address_ids):
-        return address_ids.map(lambda address_uid2: ((address_uid2[0].get(AddressComponents.NAME, ''), address_uid2[0].get(Coordinates.LATITUDE), address_uid2[0].get(Coordinates.LONGITUDE)), address_uid2[1]) )
+        return address_ids.map(lambda (address, uid): ((address.get(AddressComponents.NAME, ''), address.get(Coordinates.LATITUDE), address.get(Coordinates.LONGITUDE)), uid) )
 
     @classmethod
     def batch_doc_count(cls, docs):
@@ -105,27 +106,28 @@ class VenueDeduperSpark(object):
         if geo_model:
             names_geo_tfidf = GeoTFIDFSpark.docs_tfidf(name_geo_word_counts, geo_doc_frequency, updated_total_docs_geo_aliases)
 
-        address_hashes = address_ids.flatMap(lambda address_uid3: [(h, (address_uid3[1], address_uid3[0])) for h in VenueDeduper.near_dupe_hashes(address_uid3[0], use_latlon=use_latlon, use_city=use_city, use_postal_code=use_postal_code)])
+        address_hashes = address_ids.flatMap(lambda (address, uid): [(h, (uid, address)) for h in VenueDeduper.near_dupe_hashes(address, use_latlon=use_latlon, use_city=use_city, use_postal_code=use_postal_code)])
 
         address_dupe_pairs = AddressDeduperSpark.address_dupe_pairs(address_hashes)
 
-        id_names = name_ids.map(lambda name_uid: (name_uid[1], name_uid[0]))
+        id_names = name_ids.map(lambda (name, uid): (uid, name))
 
-        exact_dupe_pairs = list(IDPairRDD.join_pairs(address_dupe_pairs, id_names) \
-                                    .filter(lambda uid1_uid2_name1_name2: VenueDeduper.is_exact_name_dupe(uid1_uid2_name1_name2[1][0], uid1_uid2_name1_name2[1][1])).keys())
+        exact_dupe_pairs = IDPairRDD.join_pairs(address_dupe_pairs, id_names) \
+                                    .filter(lambda ((uid1, uid2), (name1, name2)): VenueDeduper.is_exact_name_dupe(name1, name2)) \
+                                    .keys()
 
         if not geo_model:
             dupe_pair_sims = IDPairRDD.join_pairs(address_dupe_pairs, names_tfidf) \
-                                      .mapValues(lambda tfidf1_tfidf2: cls.name_similarity(list(tfidf1_tfidf2[0].items()), list(tfidf1_tfidf2[1].items())))
+                                      .mapValues(lambda (tfidf1, tfidf2): cls.name_similarity(tfidf1.items(), tfidf2.items()))
         else:
             dupe_pair_sims = IDPairRDD.join_pairs(address_dupe_pairs, names_tfidf.join(names_geo_tfidf)) \
-                                      .mapValues(lambda tfidf1_geo_tfidf1_tfidf2_geo_tfidf2: cls.name_geo_similarity(list(tfidf1_geo_tfidf1_tfidf2_geo_tfidf2[0][0].items()), list(tfidf1_geo_tfidf1_tfidf2_geo_tfidf2[1][0].items()),
-                                                                                                                              list(tfidf1_geo_tfidf1_tfidf2_geo_tfidf2[0][1].items()), list(tfidf1_geo_tfidf1_tfidf2_geo_tfidf2[1][1].items()),
+                                      .mapValues(lambda ((tfidf1, geo_tfidf1), (tfidf2, geo_tfidf2)): cls.name_geo_similarity(tfidf1.items(), tfidf2.items(),
+                                                                                                                              geo_tfidf1.items(), geo_tfidf2.items(),
                                                                                                                               geo_model_proportion=geo_model_proportion))
 
-        exact_dupe_sims = exact_dupe_pairs.map(lambda uid1_uid24: ((uid1_uid24[0], uid1_uid24[1]), (DedupeResponse.classifications.EXACT_DUPE, 1.0)))
+        exact_dupe_sims = exact_dupe_pairs.map(lambda (uid1, uid2): ((uid1, uid2), (DedupeResponse.classifications.EXACT_DUPE, 1.0)))
 
-        possible_dupe_sims = dupe_pair_sims.filter(lambda uid1_uid2_sim: uid1_uid2_sim[1] >= name_review_threshold) \
+        possible_dupe_sims = dupe_pair_sims.filter(lambda ((uid1, uid2), sim): sim >= name_review_threshold) \
                                            .mapValues(lambda sim: (DedupeResponse.classifications.LIKELY_DUPE if sim >= name_dupe_threshold else DedupeResponse.classifications.NEEDS_REVIEW, sim)) \
                                            .subtractByKey(exact_dupe_sims)
 
